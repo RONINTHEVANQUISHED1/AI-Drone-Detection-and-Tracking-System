@@ -1,0 +1,118 @@
+#include <esp_camera.h>
+// IMPORTANT: Replace this with the exact name of your exported Edge Impulse library zip
+#include <your_drone_detection_inference.h> 
+#include "edge-impulse-sdk/dsp/image/image.hpp"
+
+// AI-Thinker ESP32-CAM Pin Configuration
+#define PWDN_GPIO_NUM     32
+#define RESET_GPIO_NUM    -1
+#define XCLK_GPIO_NUM      0
+#define SIOD_GPIO_NUM     26
+#define SIOC_GPIO_NUM     27
+#define Y9_GPIO_NUM       35
+#define Y8_GPIO_NUM       34
+#define Y7_GPIO_NUM       39
+#define Y6_GPIO_NUM       36
+#define Y5_GPIO_NUM       21
+#define Y4_GPIO_NUM       19
+#define Y3_GPIO_NUM       18
+#define Y2_GPIO_NUM        5
+#define VSYNC_GPIO_NUM    25
+#define HREF_GPIO_NUM     23
+#define PCLK_GPIO_NUM     22
+
+#define LED_BUILTIN        4 // Onboard Flash LED to act as an alarm indicator
+
+static camera_config_t camera_config = {
+    .pin_pwdn = PWDN_GPIO_NUM,
+    .pin_reset = RESET_GPIO_NUM,
+    .pin_xclk = XCLK_GPIO_NUM,
+    .pin_sscb_sda = SIOD_GPIO_NUM,
+    .pin_sscb_scl = SIOC_GPIO_NUM,
+    .pin_d7 = Y9_GPIO_NUM,
+    .pin_d6 = Y8_GPIO_NUM,
+    .pin_d5 = Y7_GPIO_NUM,
+    .pin_d4 = Y6_GPIO_NUM,
+    .pin_d3 = Y5_GPIO_NUM,
+    .pin_d2 = Y4_GPIO_NUM,
+    .pin_d1 = Y3_GPIO_NUM,
+    .pin_d0 = Y2_GPIO_NUM,
+    .pin_vsync = VSYNC_GPIO_NUM,
+    .pin_href = HREF_GPIO_NUM,
+    .pin_pclk = PCLK_GPIO_NUM,
+    .xclk_freq_hz = 20000000,
+    .ledc_timer = LEDC_TIMER_0,
+    .ledc_channel = LEDC_CHANNEL_0,
+    .pixel_format = PIXFORMAT_GRAYSCALE, // FOMO uses Grayscale for efficiency
+    .frame_size = FRAMESIZE_96X96,       // Match your model input scale (e.g., 96x96 or 48x48)
+    .jpeg_quality = 12,
+    .fb_count = 1,
+    .fb_location = CAMERA_FB_IN_PSRAM
+};
+
+void setup() {
+    Serial.begin(115200);
+    pinMode(LED_BUILTIN, OUTPUT);
+    digitalWrite(LED_BUILTIN, LOW);
+
+    // Initialize Camera
+    esp_err_t err = esp_camera_init(&camera_config);
+    if (err != ESP_OK) {
+        Serial.printf("Camera init failed with error 0x%x\n", err);
+        return;
+    }
+    Serial.println("Camera successfully initialized.");
+}
+
+void loop() {
+    // Acquire frame from frame buffer
+    camera_fb_t *fb = esp_camera_fb_get();
+    if (!fb) {
+        Serial.println("Camera capture failed");
+        return;
+    }
+
+    // Allocate structure to parse image data over to the TinyML model
+    signal_t signal;
+    int err = numpy::signal_from_buffer(fb->buf, fb->len, &signal);
+    if (err != 0) {
+        Serial.printf("Failed to create signal from buffer (%d)\n", err);
+        esp_camera_fb_return(fb);
+        return;
+    }
+
+    // Run Object Detection Inference
+    ei_impulse_result_t result = { 0 };
+    EI_IMPULSE_ERROR r = run_classifier(&signal, &result, false);
+    if (r != EI_IMPULSE_OK) {
+        Serial.printf("ERR: Failed to run classifier (%d)\n", r);
+        esp_camera_fb_return(fb);
+        return;
+    }
+
+    bool drone_found = false;
+
+    // Parse Edge Impulse bounding boxes/centroids
+    for (size_t ix = 0; ix < result.bounding_boxes_count; ix++) {
+        auto bb = result.bounding_boxes[ix];
+        if (bb.value == 0) continue; // Skip weak detections
+
+        // Check if the label matches your custom Edge Impulse label
+        if (strcmp(bb.label, "drone") == 0 && bb.value >= 0.70) { // 70% confidence threshold
+            Serial.printf("DRONE DETECTED! Conf: %0.2f at [X:%d, Y:%d]\n", bb.value, bb.x, bb.y);
+            drone_found = true;
+        }
+    }
+
+    // Output State Changes
+    if (drone_found) {
+        digitalWrite(LED_BUILTIN, HIGH); // Flash the LED if a drone is caught
+    } else {
+        digitalWrite(LED_BUILTIN, LOW);
+    }
+
+    // Hand back the frame buffer memory to avoid crashing the board
+    esp_camera_fb_return(fb);
+    
+    delay(200); // Dynamic sampling delay
+}
