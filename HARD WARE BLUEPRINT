@@ -1,0 +1,22 @@
+                    USB Camera / ESP32-CAM
+                            │
+                            ▼
+                  Python + OpenCV + YOLO
+                            │
+                 Detect Drone (Bounding Box)
+                            │
+                 Calculate Center (X,Y)
+                            │
+                    PID Tracking Algorithm
+                            │
+                      Serial (USB COM)
+                            │
+             Arduino Nano / ESP32 Controller
+                            │
+                 ┌──────────┴──────────┐
+                 ▼                     ▼
+           Pan Servo              Tilt Servo
+                 │                     │
+                 └──────────┬──────────┘
+                            ▼
+                    Camera follows drone
